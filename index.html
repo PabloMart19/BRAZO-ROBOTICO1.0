@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Control por Voz - Brazo Robótico (Nube)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <style>
+    :root { --bg-color: #0b0f19; --primary: #00f2fe; --danger: #ff0844; --success: #00e676; --text: #f0f4f8; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background: var(--bg-color); color: var(--text); display: flex; flex-direction: column; align-items: center; padding: 16px; min-height: 100vh; }
+    .container { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 16px; }
+    header { text-align: center; padding: 10px 0; }
+    header h1 { font-size: 1.4rem; color: var(--primary); }
+    .card { background: rgba(23, 32, 54, 0.7); border-radius: 16px; padding: 16px; text-align: center; }
+    .status-bar { font-size: 0.9rem; color: var(--success); font-weight: bold; }
+    
+    .mic-btn { width: 110px; height: 110px; border-radius: 50%; background: var(--primary); border: none; box-shadow: 0 0 20px var(--primary); cursor: pointer; margin: 20px auto; transition: 0.2s; display: flex; justify-content: center; align-items: center; }
+    .mic-btn svg { width: 48px; height: 48px; fill: #000; }
+    .mic-btn.listening { background: var(--danger); box-shadow: 0 0 30px var(--danger); }
+    .mic-btn.listening svg { fill: #fff; }
+    
+    .transcript-box { min-height: 48px; font-size: 1.1rem; font-weight: 600; }
+    .console-box { background: #000; padding: 10px; border-radius: 8px; height: 100px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; color: #8a99ad; display: flex; flex-direction: column-reverse; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Brazo Robótico Global</h1>
+      <p>Conexión vía Internet</p>
+    </header>
+
+    <div class="card status-bar" id="statusText">🟡 Conectando a la nube...</div>
+
+    <div class="card">
+      <button class="mic-btn" id="micBtn">
+        <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+      </button>
+      <div class="transcript-box" id="transcriptBox">Toca para hablar...</div>
+    </div>
+
+    <div class="console-box" id="consoleBox"></div>
+  </div>
+
+  <script>
+    const statusText = document.getElementById('statusText');
+    const transcriptBox = document.getElementById('transcriptBox');
+    const micBtn = document.getElementById('micBtn');
+    const consoleBox = document.getElementById('consoleBox');
+
+    function log(msg) {
+      const entry = document.createElement('div');
+      entry.textContent = `> ${msg}`;
+      consoleBox.insertBefore(entry, consoleBox.firstChild);
+    }
+
+    // --- CONFIGURACIÓN NUBE MQTT ---
+    const mqtt_server = "broker.hivemq.com";
+    const mqtt_port = 8000; // Puerto WebSockets
+    const mqtt_topic = "pablo/brazo_robotico/comando";
+    let client = new Paho.MQTT.Client(mqtt_server, mqtt_port, "AppMovil_" + parseInt(Math.random() * 1000));
+
+    client.onConnectionLost = onConnectionLost;
+
+    client.connect({
+      onSuccess: onConnect,
+      onFailure: (err) => { statusText.innerHTML = "🔴 Error de conexión"; log("Fallo MQTT: " + err.errorMessage); }
+    });
+
+    function onConnect() {
+      statusText.innerHTML = "🟢 Conectado a Internet";
+      log("Nube lista.");
+    }
+
+    function onConnectionLost(responseObject) {
+      if (responseObject.errorCode !== 0) {
+        statusText.innerHTML = "🔴 Desconectado";
+        log("Conexión perdida. Recarga la app.");
+      }
+    }
+
+    function sendCommand(cmd) {
+      if (!client.isConnected()) { log("Error: No hay conexión a la nube."); return; }
+      let message = new Paho.MQTT.Message(cmd);
+      message.destinationName = mqtt_topic;
+      client.send(message);
+      log("Enviado a la placa: " + cmd);
+    }
+
+    // --- DICCIONARIO DE VOZ ---
+    const COMMANDS = [
+      { action: 'COGER', synonyms: ['cógelo', 'coge', 'agarra', 'atrapa', 'toma'] },
+      { action: 'HOME', synonyms: ['inicio', 'home', 'reposo', 'vuelve a base'] },
+      { action: 'REC', synonyms: ['grabar', 'rec', 'empieza a grabar'] },
+      { action: 'PLAY', synonyms: ['reproducir', 'play', 'reproduce'] },
+      { action: 'ABRIR', synonyms: ['abrir pinza', 'abre pinza', 'suelta'] },
+      { action: 'CERRAR', synonyms: ['cerrar pinza', 'cierra pinza', 'aprieta'] },
+      { action: 'STOP', synonyms: ['alto', 'para', 'stop', 'detén'] }
+    ];
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { log("Navegador no soporta voz."); } 
+    else {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'es-ES';
+      
+      let isListening = false;
+      micBtn.addEventListener('click', () => { isListening ? recognition.stop() : recognition.start(); });
+
+      recognition.onstart = () => { isListening = true; micBtn.classList.add('listening'); transcriptBox.textContent = "Escuchando..."; };
+      recognition.onend = () => { isListening = false; micBtn.classList.remove('listening'); };
+      
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript.toLowerCase().trim();
+        transcriptBox.textContent = `"${text}"`;
+        log(`Oído: ${text}`);
+        
+        let found = false;
+        for (const cmd of COMMANDS) {
+          for (const syn of cmd.synonyms) {
+            if (text.includes(syn)) { sendCommand(cmd.action); found = true; break; }
+          }
+          if (found) break;
+        }
+        if (!found) log("Comando no reconocido.");
+      };
+    }
+  </script>
+</body>
+</html>
