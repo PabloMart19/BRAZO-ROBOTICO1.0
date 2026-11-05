@@ -55,15 +55,16 @@
       consoleBox.insertBefore(entry, consoleBox.firstChild);
     }
 
-    // --- CONFIGURACIÓN NUBE MQTT ---
+    // --- CONFIGURACIÓN NUBE MQTT CORREGIDA (HTTPS/SSL) ---
     const mqtt_server = "broker.hivemq.com";
-    const mqtt_port = 8000; // Puerto WebSockets
+    const mqtt_port = 8884; // Puerto seguro obligatorio para GitHub
     const mqtt_topic = "pablo/brazo_robotico/comando";
     let client = new Paho.MQTT.Client(mqtt_server, mqtt_port, "AppMovil_" + parseInt(Math.random() * 1000));
 
     client.onConnectionLost = onConnectionLost;
 
     client.connect({
+      useSSL: true, // Activamos la seguridad para que el móvil no lo bloquee
       onSuccess: onConnect,
       onFailure: (err) => { statusText.innerHTML = "🔴 Error de conexión"; log("Fallo MQTT: " + err.errorMessage); }
     });
@@ -88,7 +89,6 @@
       log("Enviado a la placa: " + cmd);
     }
 
-    // --- DICCIONARIO DE VOZ ---
     const COMMANDS = [
       { action: 'COGER', synonyms: ['cógelo', 'coge', 'agarra', 'atrapa', 'toma'] },
       { action: 'HOME', synonyms: ['inicio', 'home', 'reposo', 'vuelve a base'] },
